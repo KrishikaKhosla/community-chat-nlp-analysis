@@ -7,35 +7,31 @@ from collections import Counter
 import pandas as pd
 
 
-def daily_sentiment_trend(df: pd.DataFrame) -> pd.DataFrame:
-    """Average sentiment compound score per day, plus message volume."""
+def sentiment_trend_by_segment(df: pd.DataFrame) -> pd.DataFrame:
+    """Average sentiment compound score per conversation segment, plus
+    message volume. `segment` is a sequential bucket standing in for a time
+    axis (see src/clean.py) since this dataset has no real timestamps."""
     grouped = (
-        df.groupby("date")
+        df.groupby("segment")
         .agg(
             avg_sentiment=("sentiment_compound", "mean"),
             message_count=("message_id", "count"),
         )
         .reset_index()
-        .sort_values("date")
+        .sort_values("segment")
     )
     return grouped
 
 
-def hourly_activity(df: pd.DataFrame) -> pd.DataFrame:
-    """Message count per hour of day (0-23) — shows when the community is most active."""
-    grouped = (
-        df.groupby("hour")
-        .agg(message_count=("message_id", "count"))
-        .reindex(range(24), fill_value=0)
-        .reset_index()
-    )
-    return grouped
+def message_length_distribution(df: pd.DataFrame) -> pd.Series:
+    """Word count per message — shows typical message length in the community."""
+    return df["text_for_sentiment"].str.split().str.len()
 
 
 def top_authors(df: pd.DataFrame, n: int = 10) -> pd.DataFrame:
     """Most active authors by message count, with their average sentiment."""
     grouped = (
-        df[df["author"] != "nan"]
+        df[df["author"].notna()]
         .groupby("author")
         .agg(
             message_count=("message_id", "count"),

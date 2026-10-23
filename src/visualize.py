@@ -25,36 +25,38 @@ def _save(fig, name: str):
 
 
 def plot_sentiment_trend(df: pd.DataFrame):
-    trend = aggregate.daily_sentiment_trend(df)
+    """Sentiment across the conversation timeline. X-axis is a sequential
+    segment number (not a calendar date) since this dataset has no real
+    timestamps — see src/ingest.py and src/clean.py for why."""
+    trend = aggregate.sentiment_trend_by_segment(df)
 
     fig, ax1 = plt.subplots(figsize=(10, 5))
-    ax1.plot(trend["date"], trend["avg_sentiment"], color="tab:blue", marker="o")
-    ax1.set_xlabel("Date")
+    ax1.plot(trend["segment"], trend["avg_sentiment"], color="tab:blue", marker="o")
+    ax1.set_xlabel("Conversation segment (chronological order, earliest → latest)")
     ax1.set_ylabel("Avg. sentiment (compound)", color="tab:blue")
     ax1.axhline(0, color="gray", linewidth=0.8, linestyle="--")
-    ax1.tick_params(axis="x", rotation=45)
 
     ax2 = ax1.twinx()
-    ax2.bar(trend["date"], trend["message_count"], alpha=0.2, color="tab:gray")
+    ax2.bar(trend["segment"], trend["message_count"], alpha=0.2, color="tab:gray")
     ax2.set_ylabel("Message volume", color="tab:gray")
 
-    fig.suptitle("Community Sentiment Over Time")
+    fig.suptitle("Community Sentiment Across the Conversation Timeline")
     fig.tight_layout()
     _save(fig, "sentiment_trend.png")
 
 
-def plot_hourly_activity(df: pd.DataFrame):
-    hourly = aggregate.hourly_activity(df)
+def plot_message_length_distribution(df: pd.DataFrame):
+    lengths = aggregate.message_length_distribution(df)
+    lengths = lengths[lengths <= lengths.quantile(0.98)]  # trim extreme outliers for readability
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.bar(hourly["hour"], hourly["message_count"], color="tab:purple")
-    ax.set_xlabel("Hour of day (UTC)")
+    ax.hist(lengths, bins=30, color="tab:purple", edgecolor="white")
+    ax.set_xlabel("Message length (words)")
     ax.set_ylabel("Message count")
-    ax.set_title("Community Activity by Hour of Day")
-    ax.set_xticks(range(0, 24, 2))
+    ax.set_title("Message Length Distribution")
 
     fig.tight_layout()
-    _save(fig, "hourly_activity.png")
+    _save(fig, "message_length_distribution.png")
 
 
 def plot_top_authors(df: pd.DataFrame, n: int = 10):
@@ -122,7 +124,7 @@ def plot_wordcloud(df: pd.DataFrame):
 
 def generate_all_figures(df: pd.DataFrame):
     plot_sentiment_trend(df)
-    plot_hourly_activity(df)
+    plot_message_length_distribution(df)
     plot_top_authors(df)
     plot_sentiment_distribution(df)
     plot_word_frequency(df)

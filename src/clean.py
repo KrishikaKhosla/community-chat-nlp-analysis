@@ -26,10 +26,18 @@ def ensure_nltk_data():
 
 
 URL_PATTERN = re.compile(r"https?://\S+|www\.\S+")
-MENTION_PATTERN = re.compile(r"/u/\w+|/r/\w+|u/\w+|r/\w+")
+MENTION_PATTERN = re.compile(r"<@!?\d+>|<#\d+>")  # Discord user/channel mention IDs
 WHITESPACE_PATTERN = re.compile(r"\s+")
 
 REMOVED_MARKERS = {"[deleted]", "[removed]", "", "none", "nan"}
+
+# Discord's own system/audit messages (join notices, pins, calls) that get
+# mixed into the chat log but aren't actual conversation content.
+SYSTEM_MESSAGE_PATTERN = re.compile(
+    r"^(Joined the server\.|Pinned a message\.|started a call|"
+    r"changed the channel name|added \S+ to the (thread|group)\.?)",
+    re.IGNORECASE,
+)
 
 
 def basic_clean_text(text: str) -> str:
@@ -56,21 +64,23 @@ def clean_messages(df: pd.DataFrame) -> pd.DataFrame:
     sentiment analysis and aggregation.
 
     Steps:
-      1. Drop deleted/removed/bot messages
-      2. Drop duplicates and empty text
+      1. Drop deleted/empty messages and Discord system notices (joins, pins)
+      2. Drop duplicates
       3. Add a lightly-cleaned `text_for_sentiment` column
       4. Add a `tokens` column (list of cleaned words) for frequency analysis
-      5. Convert `created_utc` into a proper datetime column
+      5. Bucket messages into sequential `segment`s (a time-axis proxy, since
+         this dataset has no real timestamps — see src/ingest.py)
     """
     ensure_nltk_data()
     stop_words = set(stopwords.words("english"))
 
     cleaned = df.copy()
 
-    # Drop rows with no usable text or from deleted/bot accounts.
+    # Drop rows with no usable text or that are Discord system notices.
     cleaned["text"] = cleaned["text"].astype(str)
     cleaned = cleaned[~cleaned["text"].str.lower().isin(REMOVED_MARKERS)]
-    cleaned = cleaned[~cleaned["author"].isin(["None", "AutoModerator"])]
+    cleaned = cleaned[~cleaned["text"].str.match(SYSTEM_MESSAGE_PATTERN)]
+    cleaned = cleaned[~cleaned["author"].str.lower().isin(["deleted user#0000"])]
 
     cleaned = cleaned.drop_duplicates(subset="message_id")
     cleaned = cleaned.dropna(subset=["text"])
@@ -82,11 +92,16 @@ def clean_messages(df: pd.DataFrame) -> pd.DataFrame:
         lambda t: tokenize_for_frequency(t, stop_words)
     )
 
-    cleaned["created_dt"] = pd.to_datetime(cleaned["created_utc"], unit="s")
-    cleaned["date"] = cleaned["created_dt"].dt.date
-    cleaned["hour"] = cleaned["created_dt"].dt.hour
+    cleaned = cleaned.reset_index(drop=True)
 
-    return cleaned.reset_index(drop=True)
+    # 20 roughly-equal sequential segments across the conversation history,
+    # used as a stand-in "timeline" for trend charts.
+    num_segments = min(20, max(1, len(cleaned)))
+    cleaned["segment"] = pd.qcut(
+        cleaned.index, q=num_segments, labels=False, duplicates="drop"
+    )
+
+    return cleaned
 
 
 if __name__ == "__main__":

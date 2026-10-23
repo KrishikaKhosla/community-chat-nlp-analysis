@@ -1,98 +1,91 @@
 """
-Data ingestion: pulls real community discussion data from a subreddit.
+Data ingestion: loads real community chat data from a public Hugging Face
+dataset — "breadlicker45/discord-chat", a dump of the EleutherAI Discord
+server (the open-source AI research community behind GPT-Neo/GPT-J).
 
-Why Reddit instead of a private Discord/WhatsApp export?
-- It's public data we're allowed to collect (no ToS/privacy issues).
-- Threads are naturally a "community chat" with replies, timestamps, and authors.
-- PRAW (Python Reddit API Wrapper) makes pulling it straightforward.
+Why this source instead of live-scraping Reddit?
+Reddit's public endpoints are unreliable to reach from many cloud/CI
+environments (aggressive bot blocking on datacenter IPs), and the official
+API requires registering a developer app. Hugging Face's dataset hub serves
+real, publicly-shared chat logs over plain HTTPS with no auth, no API key,
+and no rate-limit dance — a much more reproducible source for a pipeline
+other people (e.g. an interviewer) will actually want to run.
 
-Each row we collect is one message (a post OR a comment), normalized into the
-same shape, so the rest of the pipeline doesn't need to care which it came from.
+Each row in the raw dataset is a *block* of consecutive chat lines in the
+form "Username#1234: message text". This module parses those blocks into
+individual messages. There are no real timestamps in this dataset, so a
+sequential `seq_index` (the message's position in server history, since the
+dataset is chronologically ordered) stands in as a time axis — later stages
+treat it as "conversation order" rather than wall-clock time.
 """
 
-import os
-import time
-import praw
+import re
+
 import pandas as pd
-from dotenv import load_dotenv
 
-load_dotenv()
+DATASET_PARQUET_URL = (
+    "https://huggingface.co/datasets/breadlicker45/discord-chat/"
+    "resolve/refs%2Fconvert%2Fparquet/default/train/0000.parquet"
+)
 
-
-def get_reddit_client() -> praw.Reddit:
-    """Builds an authenticated, read-only Reddit client from .env credentials."""
-    client_id = os.getenv("REDDIT_CLIENT_ID")
-    client_secret = os.getenv("REDDIT_CLIENT_SECRET")
-    user_agent = os.getenv("REDDIT_USER_AGENT")
-
-    if not all([client_id, client_secret, user_agent]):
-        raise EnvironmentError(
-            "Missing Reddit API credentials. Copy .env.example to .env and fill it in."
-        )
-
-    reddit = praw.Reddit(
-        client_id=client_id,
-        client_secret=client_secret,
-        user_agent=user_agent,
-    )
-    reddit.read_only = True
-    return reddit
+# Matches lines like "SomeUser#1234: message text"
+MESSAGE_LINE_PATTERN = re.compile(r"^(.+?#\d{2,6}): ?(.*)$")
 
 
-def fetch_subreddit_messages(
-    subreddit_name: str,
-    post_limit: int = 100,
-    comments_per_post: int = 50,
-) -> pd.DataFrame:
+def _parse_block(block: str, rows: list, start_seq: int) -> int:
     """
-    Pulls hot posts from a subreddit plus their top-level comments.
-
-    Returns a DataFrame with one row per "message" (post or comment):
-        message_id, parent_type, author, text, created_utc, score, subreddit
+    Parses one raw text block into individual message rows, appended to
+    `rows`. Lines that don't start a new "Author#tag: " message are treated
+    as a continuation of the previous message (multi-line messages).
+    Returns the next available seq_index.
     """
-    reddit = get_reddit_client()
-    subreddit = reddit.subreddit(subreddit_name)
+    seq = start_seq
+    current = None
+
+    for line in block.split("\n"):
+        if not line.strip():
+            continue
+        match = MESSAGE_LINE_PATTERN.match(line)
+        if match:
+            if current is not None:
+                rows.append(current)
+            author, text = match.group(1), match.group(2)
+            current = {
+                "message_id": f"m{seq}",
+                "author": author,
+                "text": text,
+                "seq_index": seq,
+            }
+            seq += 1
+        elif current is not None:
+            current["text"] += " " + line.strip()
+
+    if current is not None:
+        rows.append(current)
+
+    return seq
+
+
+def fetch_discord_messages(num_blocks: int = 400) -> pd.DataFrame:
+    """
+    Downloads the dataset's parquet file and parses the first `num_blocks`
+    raw chat blocks into a flat DataFrame of individual messages:
+        message_id, author, text, seq_index
+    """
+    raw = pd.read_parquet(DATASET_PARQUET_URL)
+    blocks = raw.iloc[:num_blocks]["data"]
 
     rows = []
+    seq = 0
+    for block in blocks:
+        seq = _parse_block(block, rows, seq)
 
-    for submission in subreddit.hot(limit=post_limit):
-        rows.append(
-            {
-                "message_id": submission.id,
-                "parent_type": "post",
-                "author": str(submission.author),
-                "text": f"{submission.title} {submission.selftext or ''}".strip(),
-                "created_utc": submission.created_utc,
-                "score": submission.score,
-                "subreddit": subreddit_name,
-            }
-        )
-
-        # Expand only top-level comments (fast, and most "chat-like").
-        submission.comments.replace_more(limit=0)
-        for comment in submission.comments[:comments_per_post]:
-            rows.append(
-                {
-                    "message_id": comment.id,
-                    "parent_type": "comment",
-                    "author": str(comment.author),
-                    "text": comment.body,
-                    "created_utc": comment.created_utc,
-                    "score": comment.score,
-                    "subreddit": subreddit_name,
-                }
-            )
-
-        # Be polite to Reddit's API — avoid hammering it.
-        time.sleep(0.5)
-
-    df = pd.DataFrame(rows)
-    return df
+    return pd.DataFrame(rows)
 
 
-def save_raw_data(df: pd.DataFrame, subreddit_name: str) -> str:
-    """Saves the raw pulled data to data/raw/ and returns the file path."""
-    out_path = f"data/raw/{subreddit_name}_raw.csv"
+def save_raw_data(df: pd.DataFrame, name: str = "discord_chat") -> str:
+    """Saves the raw parsed data to data/raw/ and returns the file path."""
+    out_path = f"data/raw/{name}_raw.csv"
     df.to_csv(out_path, index=False)
     return out_path
 
@@ -100,13 +93,18 @@ def save_raw_data(df: pd.DataFrame, subreddit_name: str) -> str:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Pull chat-like data from a subreddit.")
-    parser.add_argument("subreddit", help="Subreddit name, e.g. 'learnpython'")
-    parser.add_argument("--posts", type=int, default=100, help="Number of hot posts to pull")
-    parser.add_argument("--comments", type=int, default=50, help="Top-level comments per post")
+    parser = argparse.ArgumentParser(
+        description="Load and parse chat data from the EleutherAI Discord dataset."
+    )
+    parser.add_argument(
+        "--blocks",
+        type=int,
+        default=400,
+        help="Number of raw chat blocks to parse (each block ~15-20 messages)",
+    )
     args = parser.parse_args()
 
-    print(f"Pulling data from r/{args.subreddit} ...")
-    data = fetch_subreddit_messages(args.subreddit, args.posts, args.comments)
-    path = save_raw_data(data, args.subreddit)
-    print(f"Saved {len(data)} messages to {path}")
+    print(f"Loading {args.blocks} chat blocks from the dataset...")
+    data = fetch_discord_messages(args.blocks)
+    path = save_raw_data(data)
+    print(f"Parsed {len(data)} messages -> {path}")

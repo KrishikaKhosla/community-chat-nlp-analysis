@@ -10,11 +10,11 @@ def test_basic_clean_text_strips_urls():
     assert "example.com" not in result
 
 
-def test_basic_clean_text_strips_subreddit_mentions():
-    text = "I agree with u/someuser about r/learnpython"
+def test_basic_clean_text_strips_discord_mentions():
+    text = "Thanks <@123456789> and welcome to <#987654321>"
     result = basic_clean_text(text)
-    assert "u/someuser" not in result
-    assert "r/learnpython" not in result
+    assert "<@123456789>" not in result
+    assert "<#987654321>" not in result
 
 
 def test_basic_clean_text_preserves_case_and_punctuation():
@@ -34,44 +34,32 @@ def test_tokenize_for_frequency_removes_stopwords_and_lowercases():
     assert all(t == t.lower() for t in tokens)
 
 
-def test_clean_messages_drops_deleted_and_duplicate_rows():
+def test_clean_messages_drops_deleted_system_and_duplicate_rows():
     df = pd.DataFrame(
         [
             {
                 "message_id": "1",
-                "parent_type": "comment",
-                "author": "alice",
+                "author": "alice#1111",
                 "text": "[deleted]",
-                "created_utc": 1700000000,
-                "score": 1,
-                "subreddit": "test",
+                "seq_index": 0,
             },
             {
                 "message_id": "2",
-                "parent_type": "comment",
-                "author": "bob",
+                "author": "bob#2222",
                 "text": "Great thread, thanks for sharing!",
-                "created_utc": 1700000100,
-                "score": 5,
-                "subreddit": "test",
+                "seq_index": 1,
             },
             {
                 "message_id": "2",
-                "parent_type": "comment",
-                "author": "bob",
+                "author": "bob#2222",
                 "text": "Great thread, thanks for sharing!",
-                "created_utc": 1700000100,
-                "score": 5,
-                "subreddit": "test",
+                "seq_index": 1,
             },
             {
                 "message_id": "3",
-                "parent_type": "comment",
-                "author": "AutoModerator",
-                "text": "This is an automated message.",
-                "created_utc": 1700000200,
-                "score": 0,
-                "subreddit": "test",
+                "author": "carol#3333",
+                "text": "Joined the server.",
+                "seq_index": 2,
             },
         ]
     )
@@ -82,4 +70,5 @@ def test_clean_messages_drops_deleted_and_duplicate_rows():
     assert cleaned.iloc[0]["message_id"] == "2"
     assert "text_for_sentiment" in cleaned.columns
     assert "tokens" in cleaned.columns
+    assert "segment" in cleaned.columns
     assert isinstance(cleaned.iloc[0]["tokens"], list)
