@@ -1,11 +1,20 @@
 # Community Chat NLP Analysis
 
-A Python pipeline that analyzes real community chat data — the public
-**EleutherAI Discord server logs** (the open-source AI research community
-behind GPT-Neo and GPT-J) — cleaning and preprocessing with NLTK, scoring
-sentiment with VADER, and producing visual insights with Matplotlib:
-sentiment trends, most active contributors, message patterns, and word
-frequency.
+A Python pipeline that analyzes real community chat data, cleaning and
+preprocessing with NLTK, scoring sentiment with VADER, and producing visual
+insights with Matplotlib: sentiment trends, most active contributors,
+message patterns, and word frequency.
+
+Two pluggable data sources are supported:
+- **`dataset`** (default, zero setup) — a public dataset of real
+  **EleutherAI Discord server logs** (the open-source AI research community
+  behind GPT-Neo/GPT-J), downloaded directly from Hugging Face.
+- **`live`** — pulls real, current message history from any Discord channel
+  you have access to, via a bot token you create yourself.
+
+Both sources feed the exact same clean → sentiment → aggregate → visualize
+pipeline, normalized to a common message schema — a small "pluggable data
+source" design that keeps the analysis code source-agnostic.
 
 ## Why this project
 
@@ -19,24 +28,32 @@ This project answers questions like:
 ## Pipeline
 
 ```
-HF Dataset (parquet)  →  Clean (NLTK)  →  Sentiment (VADER)  →  Aggregate  →  Visualize (Matplotlib)
-     ingest.py            clean.py         sentiment.py        aggregate.py    visualize.py
+                 ┌─ ingest.py        (static dataset, no setup) ─┐
+                 ├─ discord_live.py  (your own live channel)     ┴→  Clean (NLTK)  →  Sentiment (VADER)  →  Aggregate  →  Visualize (Matplotlib)
+                 └────────────────────────────────────────────────    clean.py         sentiment.py        aggregate.py    visualize.py
 ```
 
-1. **Ingest** (`src/ingest.py`) — downloads real Discord chat logs from a
-   public Hugging Face dataset (`breadlicker45/discord-chat`) and parses
-   the raw `"Username#1234: message"` text blocks into individual messages.
+1. **Ingest** — two interchangeable sources, normalized to the same schema
+   (`message_id`, `author`, `text`, plus timing info):
+   - `src/ingest.py` downloads a public Hugging Face dataset of real
+     Discord chat logs (`breadlicker45/discord-chat`) and parses the raw
+     `"Username#1234: message"` text blocks into individual messages.
+   - `src/discord_live.py` pulls live message history from a real Discord
+     channel via Discord's REST API, using a bot token you provide.
 2. **Clean** (`src/clean.py`) — drops deleted/empty messages and Discord
    system notices (joins, pins), strips URLs and Discord mention IDs, and
    tokenizes text with NLTK (stopword removal for word-frequency analysis,
    while preserving case/punctuation separately for sentiment analysis —
-   VADER relies on those signals).
+   VADER relies on those signals). Also buckets messages into sequential
+   "segments" for trend analysis, and — only when real timestamps are
+   available (the `live` source) — adds real date/hour columns too.
 3. **Sentiment** (`src/sentiment.py`) — scores every message with VADER,
    a lexicon-based sentiment model built for short, informal, social-media
    text (handles negation, punctuation emphasis, capitalization, emoji).
 4. **Aggregate** (`src/aggregate.py`) — rolls per-message scores up into
    a conversation-timeline trend, top authors, message-length distribution,
-   and word frequency tables.
+   and word frequency tables (plus hour-of-day activity, when real
+   timestamps are available).
 5. **Visualize** (`src/visualize.py`) — renders all of the above as saved
    PNG charts in `output/figures/`.
 
@@ -50,30 +67,43 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-No API keys or account setup needed — data is downloaded directly from
-Hugging Face's public dataset hub.
-
 ## Usage
 
-Run the full pipeline:
+### Option A: static dataset (default, zero setup)
 
 ```bash
-python main.py --blocks 400
+python main.py --source dataset --blocks 400
 ```
 
-`--blocks` controls how much of the dataset to parse (each block is roughly
-15-20 messages; the full dataset has ~11,000 blocks / ~200k messages total).
-400 blocks (~7,000 messages) runs in well under a minute.
+No API keys needed — data is downloaded directly from Hugging Face's public
+dataset hub. `--blocks` controls how much of the dataset to parse (each
+block is roughly 15-20 messages; the full dataset has ~11,000 blocks /
+~200k messages total). 400 blocks (~7,000 messages) runs in under a minute.
 
-This will:
-1. Save raw parsed data to `data/raw/discord_chat_raw.csv`
-2. Save cleaned + sentiment-scored data to `data/processed/discord_chat_scored.csv`
-3. Save all charts to `output/figures/`
+### Option B: your own live Discord channel
+
+```bash
+cp .env.example .env   # fill in DISCORD_BOT_TOKEN — see .env.example for setup steps
+python main.py --source live --channel-id 123456789012345678 --limit 500
+```
+
+Setup (one-time, ~10 minutes):
+1. Create a bot at https://discord.com/developers/applications
+2. Under the bot's settings, enable **"Message Content Intent"**
+3. Under **OAuth2 > URL Generator**, check scope `bot` and permissions
+   `View Channels` + `Read Message History`, then open the generated URL to
+   invite the bot to a server you have access to
+4. Copy the bot token into `.env` as `DISCORD_BOT_TOKEN`
+5. In Discord, enable **Developer Mode** (User Settings > Advanced), then
+   right-click the channel you want to analyze > **Copy Channel ID**
+
+Both options write to the same places: raw data in `data/raw/`, cleaned +
+scored data in `data/processed/`, and charts in `output/figures/`.
 
 You can also run each stage independently:
 
 ```bash
-python -m src.ingest --blocks 400
+python -m src.ingest --blocks 400                       # or: python -m src.discord_live <channel_id>
 python -m src.clean data/raw/discord_chat_raw.csv
 python -m src.sentiment data/processed/discord_chat_clean.csv
 python -m src.visualize data/processed/discord_chat_scored.csv
@@ -94,29 +124,47 @@ research community. See `output/figures/` after running the pipeline for:
   (dominated by terms like "data", "model", "channel", "welcome" — a
   believable fingerprint of an early ML research Discord)
 
+Running with `--source live` against a channel with real timestamps also
+produces `hourly_activity.png` — when the community is most active.
+
 ## Tests
 
 ```bash
 pytest
 ```
 
-12 tests covering: raw chat-block parsing (including multi-line message
-continuations), text cleaning (URL/mention stripping, stopword removal,
-system-message and dedup filtering), and sentiment scoring correctness.
+14 tests covering: raw chat-block parsing (including multi-line message
+continuations), live-API message fetching and pagination (mocked HTTP),
+text cleaning (URL/mention stripping, stopword removal, system-message and
+dedup filtering), and sentiment scoring correctness.
 
 ## Design decisions
 
-- **A public, pre-hosted dataset over live scraping**: the pipeline
-  originally scraped Reddit live, but public scraping endpoints are
-  unreliable to reach from many cloud/sandboxed environments (aggressive
-  bot-blocking on datacenter IPs) and the official API requires registering
-  a developer app. Hugging Face's dataset hub serves real, publicly-shared
-  chat data over plain HTTPS with no auth and no rate-limit dance — far more
-  reproducible for anyone (e.g. an interviewer) who wants to actually run it.
-- **Sequential "conversation segments" instead of real timestamps**: this
-  dataset doesn't include message timestamps, so trend analysis buckets
-  messages by their position in the (chronologically-ordered) chat history
-  rather than pretending to have real dates — an honest substitute time axis.
+- **Pluggable ingestion over a single hardcoded source**: `src/ingest.py`
+  and `src/discord_live.py` are two independent adapters that both produce
+  the same message schema, so the rest of the pipeline (clean, sentiment,
+  aggregate, visualize) doesn't know or care which one supplied the data.
+  This also made it easy to add the live source later without touching
+  anything downstream.
+- **A public, pre-hosted dataset as the zero-setup default**: an earlier
+  version of this pipeline only scraped Reddit live, but public scraping
+  endpoints turned out to be unreliable to reach from many cloud/sandboxed
+  environments (aggressive bot-blocking on datacenter IPs), and anyone
+  wanting to run the project would first need to register a Reddit
+  developer app. Defaulting to a dataset served over plain HTTPS with no
+  auth keeps the project runnable by anyone (e.g. an interviewer) with zero
+  setup, while `--source live` is there for real, personalized analysis.
+- **Discord's REST message-history endpoint over a persistent gateway
+  bot**: `discord.py`'s typical pattern runs a bot as a long-lived process
+  listening for new messages in real time — built for chatbots, not a
+  one-shot analysis script. Paging backwards through history via the REST
+  API gets the same real, live data but lets the script exit cleanly when done.
+- **Sequential "conversation segments" as a universal time axis**: the
+  static dataset has no real timestamps, so trend analysis buckets messages
+  by their position in the (chronologically-ordered) history rather than
+  pretending to have real dates. When real timestamps are available (the
+  live source), the pipeline additionally unlocks real date/hour-of-day
+  analysis — see `clean.py`'s conditional column logic.
 - **VADER over a transformer model**: VADER is purpose-built for short,
   informal text and runs instantly on thousands of messages with no GPU —
   a better fit than a heavier model for this scale and style of text.
@@ -130,4 +178,5 @@ system-message and dedup filtering), and sentiment scoring correctness.
 - Topic modeling (LDA) to auto-label what each spike in conversation is about
 - A small Streamlit dashboard for live, interactive exploration
 - Swap in a transformer-based sentiment model and compare results to VADER
-- Apply the same pipeline to a different public chat dataset for comparison
+- A Reddit (PRAW) ingestion adapter alongside the two Discord sources, for
+  cross-community comparison

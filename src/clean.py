@@ -68,8 +68,13 @@ def clean_messages(df: pd.DataFrame) -> pd.DataFrame:
       2. Drop duplicates
       3. Add a lightly-cleaned `text_for_sentiment` column
       4. Add a `tokens` column (list of cleaned words) for frequency analysis
-      5. Bucket messages into sequential `segment`s (a time-axis proxy, since
-         this dataset has no real timestamps — see src/ingest.py)
+      5. Bucket messages into sequential `segment`s (a time-axis proxy, used
+         by the sentiment-trend chart regardless of data source)
+      6. If real timestamps are present (`created_utc`, e.g. from the live
+         Discord source in src/discord_live.py), also add `date`/`hour`
+         columns so hour-of-day activity analysis is possible — the static
+         dataset source has no real timestamps, so this step is skipped
+         when the column is absent.
     """
     ensure_nltk_data()
     stop_words = set(stopwords.words("english"))
@@ -100,6 +105,11 @@ def clean_messages(df: pd.DataFrame) -> pd.DataFrame:
     cleaned["segment"] = pd.qcut(
         cleaned.index, q=num_segments, labels=False, duplicates="drop"
     )
+
+    if "created_utc" in cleaned.columns and cleaned["created_utc"].notna().any():
+        created_dt = pd.to_datetime(cleaned["created_utc"], unit="s")
+        cleaned["date"] = created_dt.dt.date
+        cleaned["hour"] = created_dt.dt.hour
 
     return cleaned
 

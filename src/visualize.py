@@ -45,6 +45,21 @@ def plot_sentiment_trend(df: pd.DataFrame):
     _save(fig, "sentiment_trend.png")
 
 
+def plot_hourly_activity(df: pd.DataFrame):
+    """Only called when the data has real timestamps (see generate_all_figures)."""
+    hourly = aggregate.hourly_activity(df)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(hourly["hour"], hourly["message_count"], color="tab:purple")
+    ax.set_xlabel("Hour of day (UTC)")
+    ax.set_ylabel("Message count")
+    ax.set_title("Community Activity by Hour of Day")
+    ax.set_xticks(range(0, 24, 2))
+
+    fig.tight_layout()
+    _save(fig, "hourly_activity.png")
+
+
 def plot_message_length_distribution(df: pd.DataFrame):
     lengths = aggregate.message_length_distribution(df)
     lengths = lengths[lengths <= lengths.quantile(0.98)]  # trim extreme outliers for readability
@@ -124,6 +139,8 @@ def plot_wordcloud(df: pd.DataFrame):
 
 def generate_all_figures(df: pd.DataFrame):
     plot_sentiment_trend(df)
+    if "hour" in df.columns and df["hour"].notna().any():
+        plot_hourly_activity(df)
     plot_message_length_distribution(df)
     plot_top_authors(df)
     plot_sentiment_distribution(df)

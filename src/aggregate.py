@@ -23,6 +23,20 @@ def sentiment_trend_by_segment(df: pd.DataFrame) -> pd.DataFrame:
     return grouped
 
 
+def hourly_activity(df: pd.DataFrame) -> pd.DataFrame:
+    """Message count per hour of day (0-23). Only meaningful when real
+    timestamps are available (e.g. from the live Discord source) — the
+    static dataset source has no real clock times, so callers should check
+    for an `hour` column before using this."""
+    grouped = (
+        df.groupby("hour")
+        .agg(message_count=("message_id", "count"))
+        .reindex(range(24), fill_value=0)
+        .reset_index()
+    )
+    return grouped
+
+
 def message_length_distribution(df: pd.DataFrame) -> pd.Series:
     """Word count per message — shows typical message length in the community."""
     return df["text_for_sentiment"].str.split().str.len()
