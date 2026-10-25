@@ -109,6 +109,21 @@ python -m src.sentiment data/processed/discord_chat_clean.csv
 python -m src.visualize data/processed/discord_chat_scored.csv
 ```
 
+## Interactive dashboard
+
+For live, filterable exploration instead of static PNGs, run the Streamlit
+dashboard against any scored CSV in `data/processed/`:
+
+```bash
+streamlit run dashboard.py
+```
+
+It reuses the exact same `src/aggregate.py` tables as the static charts
+above, re-rendered with Plotly, plus:
+- sidebar filters for author, sentiment label, and message length
+- KPI tiles (message count, avg. sentiment, % positive, author count)
+- a dataset picker if `data/processed/` has more than one scored CSV
+
 ## Sample output
 
 On a run of 400 blocks (~6,500 cleaned messages), sentiment skewed clearly
@@ -176,7 +191,6 @@ dedup filtering), and sentiment scoring correctness.
 ## Possible extensions
 
 - Topic modeling (LDA) to auto-label what each spike in conversation is about
-- A small Streamlit dashboard for live, interactive exploration
 - Swap in a transformer-based sentiment model and compare results to VADER
 - A Reddit (PRAW) ingestion adapter alongside the two Discord sources, for
   cross-community comparison
